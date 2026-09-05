@@ -180,12 +180,11 @@ jobs:
             kernel/out/.config  -type f \
               | sort \
               | head -500
+              } > "$REPORT"
 
-          } > "$REPORT"
-
-          echo
-          echo "Audit report created:"
-          ls -lh "$REPORT"
+            echo
+            echo "Audit report created:"
+             ls -lh "$REPORT"
 
       - name: Upload audit report
         uses: actions/upload-artifact@v4
