@@ -1,0 +1,160 @@
+name: POCO X2 Kernel - Source Audit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Audit crDroid SM6150 16.0
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Show runner information
+        run: |
+          echo "===== CPU ====="
+          nproc
+
+          echo "===== MEMORY ====="
+          free -h
+
+          echo "===== STORAGE ====="
+          df -h
+
+          echo "===== OS ====="
+          lsb_release -a || true
+
+      - name: Install basic tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            device-tree-compiler \
+            cpio \
+            rsync \
+            unzip \
+            zip \
+            python3
+
+      - name: Clone kernel source
+        run: |
+          git clone \
+            --depth=1 \
+            --branch=16.0 \
+            https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
+            kernel
+
+      - name: Show source information
+        working-directory: kernel
+        run: |
+          echo "===== BRANCH ====="
+          git branch --show-current
+
+          echo "===== COMMIT ====="
+          git rev-parse HEAD
+
+          echo "===== COMMIT DATE ====="
+          git log -1 --format='%H%n%ad%n%s'
+
+          echo "===== KERNEL VERSION ====="
+          make kernelversion
+
+          echo "===== MAKEFILE ====="
+          head -40 Makefile
+
+      - name: Search Phoenix configuration
+        working-directory: kernel
+        run: |
+          echo "===== PHOENIX REFERENCES ====="
+          grep -Rni \
+            --exclude-dir=.git \
+            -E 'phoenix|phoenixin' \
+            arch/arm64/configs \
+            arch/arm64/boot/dts \
+            2>/dev/null | head -200 || true
+
+      - name: Search wireless driver
+        working-directory: kernel
+        run: |
+          echo "===== ATH9K REFERENCES ====="
+          grep -Rni \
+            --exclude-dir=.git \
+            -E 'ATH9K|ATH9K_HTC|ath9k_htc' \
+            drivers/net/wireless \
+            drivers \
+            2>/dev/null | head -300 || true
+
+      - name: Search USB wireless support
+        working-directory: kernel
+        run: |
+          echo "===== USB WIRELESS REFERENCES ====="
+          grep -Rni \
+            --exclude-dir=.git \
+            -E 'USB_NET|USB_WLAN|WIRELESS' \
+            drivers/net/wireless \
+            drivers/usb \
+            2>/dev/null | head -300 || true
+
+      - name: List configuration files
+        working-directory: kernel
+        run: |
+          echo "===== ARM64 CONFIGS ====="
+          find arch/arm64/configs -maxdepth 2 -type f | sort
+
+      - name: Search for defconfig names
+        working-directory: kernel
+        run: |
+          echo "===== DEFCONFIG REFERENCES ====="
+          find . \
+            -type f \
+            -not -path './.git/*' \
+            \( -name '*defconfig*' -o -name '*config*' \) \
+            | sort | head -500
+
+      - name: Show Make targets
+        working-directory: kernel
+        run: |
+          make help 2>/dev/null | head -200 || true
+
+      - name: Save audit
+        run: |
+          mkdir -p audit
+
+          {
+            echo "===== RUNNER ====="
+            nproc
+            free -h
+            df -h
+
+            echo
+            echo "===== KERNEL COMMIT ====="
+            cd kernel
+            git rev-parse HEAD
+
+            echo
+            echo "===== KERNEL VERSION ====="
+            make kernelversion
+
+            echo
+            echo "===== CONFIG FILES ====="
+            find arch/arm64/configs -maxdepth 2 -type f | sort
+
+            echo
+            echo "===== ATH9K ====="
+            grep -Rni \
+              --exclude-dir=.git \
+              -E 'ATH9K|ATH9K_HTC|ath9k_htc' \
+              drivers/net/wireless \
+              drivers 2>/dev/null | head -300 || true
+
+          } > ../audit/source-audit.txt
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: poco-x2-source-audit
+          path: audit/source-audit.txt
