@@ -1,22 +1,17 @@
-name: POCO X2 Kernel - Source Audit
+name: POCO X2 - Build 1 - Baseline Kernel
 
 on:
   workflow_dispatch:
 
 jobs:
-  audit:
-    name: Audit crDroid SM6150 16.0
+  build:
+    name: Build Phoenix baseline kernel
     runs-on: ubuntu-24.04
 
     steps:
 
-      - name: Show runner information
+      - name: Show machine
         run: |
-          echo "========================================"
-          echo "        GITHUB RUNNER INFORMATION"
-          echo "========================================"
-
-          echo
           echo "CPU:"
           nproc
 
@@ -28,11 +23,7 @@ jobs:
           echo "STORAGE:"
           df -h /
 
-          echo
-          echo "OS:"
-          cat /etc/os-release
-
-      - name: Install basic tools
+      - name: Install build dependencies
         run: |
           sudo apt-get update -qq
 
@@ -41,6 +32,7 @@ jobs:
             bc \
             bison \
             flex \
+            build-essential \
             libssl-dev \
             libelf-dev \
             device-tree-compiler \
@@ -48,9 +40,10 @@ jobs:
             rsync \
             unzip \
             zip \
-            python3
+            python3 \
+            python3-pip
 
-      - name: Clone crDroid kernel source
+      - name: Clone kernel source
         run: |
           git clone \
             --depth=1 \
@@ -59,299 +52,132 @@ jobs:
             https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
             kernel
 
-      - name: Create audit directory
+      - name: Prepare output directory
         run: |
-          mkdir -p audit
+          mkdir -p kernel/out
 
-      - name: Record kernel source information
+      - name: Show source
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "        KERNEL SOURCE INFORMATION"
-          echo "========================================"
-
-          echo
-          echo "Repository:"
-          git remote get-url origin
-
-          echo
-          echo "Branch:"
-          git branch --show-current
-
-          echo
           echo "Commit:"
           git rev-parse HEAD
 
           echo
-          echo "Commit date:"
-          git log -1 --format='%ad' --date=iso
-
-          echo
-          echo "Commit subject:"
-          git log -1 --format='%s'
-
-          echo
-          echo "Kernel version from Makefile:"
+          echo "Kernel:"
           grep -E '^VERSION =|^PATCHLEVEL =|^SUBLEVEL =' Makefile
 
           echo
-          echo "Calculated kernel version:"
-          make -s kernelversion 2>/dev/null || true
+          echo "Phoenix config:"
+          cat arch/arm64/configs/vendor/phoenix.config
 
-      - name: Search Phoenix device references
+      - name: Create base Phoenix configuration
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "        PHOENIX REFERENCES"
-          echo "========================================"
+          make \
+            O="$PWD/out" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            vendor/sdmsteppe-perf_defconfig
 
-          grep -Rni \
-            --exclude-dir=.git \
-            -E 'phoenix|phoenixin' \
-            arch/arm64/configs \
-            arch/arm64/boot/dts \
-            2>/dev/null \
-            | head -300 || true
-
-      - name: Search ATH9K HTC support
+      - name: Add Phoenix configuration
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "        ATH9K / ATH9K_HTC"
-          echo "========================================"
+          ./scripts/kconfig/merge_config.sh \
+            -O "$PWD/out" \
+            "$PWD/out/.config" \
+            "$PWD/arch/arm64/configs/vendor/phoenix.config"
 
-          find drivers -type f \
-            \( -iname '*ath9k*' -o -iname '*htc*' \) \
-            | sort || true
+      - name: Finalize configuration
+        working-directory: kernel
+        run: |
+          make \
+            O="$PWD/out" \
+            ARCH=arm64 \
+            olddefconfig
+
+      - name: Verify Phoenix configuration
+        working-directory: kernel
+        run: |
+          echo "===== DEVICE ====="
+          grep '^CONFIG_MACH_XIAOMI_PHOENIX=' out/.config
 
           echo
-          echo "Configuration references:"
+          echo "===== ATH9K HTC ====="
+          grep '^CONFIG_ATH9K_HTC=' out/.config || true
 
-          grep -Rni \
-            --exclude-dir=.git \
-            -E 'ATH9K|ATH9K_HTC|ATH9K_HTC_DEBUGFS' \
-            drivers/net/wireless \
-            drivers \
-            2>/dev/null \
-            | head -300 || true
+          echo
+          echo "===== ATH9K ====="
+          grep '^CONFIG_ATH9K=' out/.config || true
 
-      - name: Search USB wireless support
+          echo
+          echo "===== MAC80211 ====="
+          grep '^CONFIG_MAC80211=' out/.config || true
+
+          echo
+          echo "===== CFG80211 ====="
+          grep '^CONFIG_CFG80211=' out/.config || true
+
+          echo
+          echo "===== USB ====="
+          grep '^CONFIG_USB=' out/.config || true
+
+      - name: Build kernel
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "        USB WIRELESS SUPPORT"
-          echo "========================================"
+          make \
+            -j"$(nproc)" \
+            O="$PWD/out" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            KCFLAGS="-Wno-error" \
+            Image.gz \
+            modules
 
-          grep -Rni \
-            --exclude-dir=.git \
-            -E 'USB_WLAN|USB_NET|WIRELESS' \
-            drivers/net/wireless \
-            drivers/usb \
-            2>/dev/null \
-            | head -300 || true
-
-      - name: Find ARM64 configuration files
+      - name: Show build output
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "        ARM64 CONFIG FILES"
-          echo "========================================"
+          echo "===== KERNEL ====="
+          ls -lh out/arch/arm64/boot/Image.gz
 
-          find arch/arm64/configs \
+          echo
+          echo "===== DTB ====="
+          find out/arch/arm64/boot/dts \
             -type f \
-            | sort
+            \( -name '*.dtb' -o -name '*.dtbo' \) \
+            | head -100 || true
 
-      - name: Search Phoenix defconfig names
-        working-directory: kernel
-        run: |
-          echo "========================================"
-          echo "        POSSIBLE PHOENIX CONFIGS"
-          echo "========================================"
-
-          find . \
+          echo
+          echo "===== MODULES ====="
+          find out \
             -type f \
-            -not -path './.git/*' \
-            \( \
-              -iname '*phoenix*' \
-              -o -iname '*phoenixin*' \
-              -o -iname '*defconfig*' \
-            \) \
-            | sort \
-            | head -500
+            -name '*.ko' \
+            | head -100 || true
 
-      - name: Search build configuration references
-        working-directory: kernel
+      - name: Package baseline artifacts
         run: |
-          echo "========================================"
-          echo "        BUILD CONFIG REFERENCES"
-          echo "========================================"
+          mkdir -p artifacts
 
-          grep -Rni \
-            --exclude-dir=.git \
-            -E 'phoenix_defconfig|phoenixin_defconfig|sm6150' \
-            Makefile \
-            arch/arm64 \
-            scripts \
-            2>/dev/null \
-            | head -300 || true
+          cp kernel/out/arch/arm64/boot/Image.gz \
+            artifacts/Image.gz
 
-      - name: Inspect kernel architecture
-        working-directory: kernel
-        run: |
-          echo "========================================"
-          echo "        ARCHITECTURE"
-          echo "========================================"
+          cp kernel/out/.config \
+            artifacts/phoenix.config
 
-          echo
-          echo "ARM64 directory:"
-          ls -la arch/arm64 | head -50
+          find kernel/out \
+            -type f \
+            -name '*.ko' \
+            -exec cp --parents {} artifacts/ \; || true
 
-          echo
-          echo "ARM64 boot directory:"
-          ls -la arch/arm64/boot | head -100
+          cd artifacts
+          zip -r ../poco-x2-baseline-kernel.zip .
 
-      - name: Create complete audit report
-        run: |
-          REPORT="$GITHUB_WORKSPACE/audit/source-audit.txt"
-
-          {
-            echo "============================================================"
-            echo "POCO X2 / PHOENIX crDroid KERNEL SOURCE AUDIT"
-            echo "============================================================"
-
-            echo
-            echo "DATE:"
-            date -u
-
-            echo
-            echo "============================================================"
-            echo "RUNNER"
-            echo "============================================================"
-
-            echo
-            echo "CPU:"
-            nproc
-
-            echo
-            echo "MEMORY:"
-            free -h
-
-            echo
-            echo "STORAGE:"
-            df -h /
-
-            echo
-            echo "============================================================"
-            echo "SOURCE"
-            echo "============================================================"
-
-            cd "$GITHUB_WORKSPACE/kernel"
-
-            echo
-            echo "Repository:"
-            git remote get-url origin
-
-            echo
-            echo "Branch:"
-            git branch --show-current
-
-            echo
-            echo "Commit:"
-            git rev-parse HEAD
-
-            echo
-            echo "Commit date:"
-            git log -1 --format='%ad' --date=iso
-
-            echo
-            echo "Commit subject:"
-            git log -1 --format='%s'
-
-            echo
-            echo "Kernel Makefile version:"
-            grep -E '^VERSION =|^PATCHLEVEL =|^SUBLEVEL =' Makefile
-
-            echo
-            echo "Kernel version:"
-            make -s kernelversion 2>/dev/null || true
-
-            echo
-            echo "============================================================"
-            echo "PHOENIX REFERENCES"
-            echo "============================================================"
-
-            grep -Rni \
-              --exclude-dir=.git \
-              -E 'phoenix|phoenixin' \
-              arch/arm64/configs \
-              arch/arm64/boot/dts \
-              2>/dev/null \
-              | head -500 || true
-
-            echo
-            echo "============================================================"
-            echo "ATH9K / ATH9K_HTC"
-            echo "============================================================"
-
-            find drivers -type f \
-              \( -iname '*ath9k*' -o -iname '*htc*' \) \
-              | sort || true
-
-            echo
-            grep -Rni \
-              --exclude-dir=.git \
-              -E 'ATH9K|ATH9K_HTC|ATH9K_HTC_DEBUGFS' \
-              drivers/net/wireless \
-              drivers \
-              2>/dev/null \
-              | head -500 || true
-
-            echo
-            echo "============================================================"
-            echo "ARM64 CONFIGURATION FILES"
-            echo "============================================================"
-
-            find arch/arm64/configs \
-              -type f \
-              | sort
-
-            echo
-            echo "============================================================"
-            echo "POSSIBLE PHOENIX CONFIGURATIONS"
-            echo "============================================================"
-
-            find . \
-              -type f \
-              -not -path './.git/*' \
-              \( \
-                -iname '*phoenix*' \
-                -o -iname '*phoenixin*' \
-                -o -iname '*defconfig*' \
-              \) \
-              | sort \
-              | head -1000
-
-            echo
-            echo "============================================================"
-            echo "USB / WIRELESS REFERENCES"
-            echo "============================================================"
-
-            grep -Rni \
-              --exclude-dir=.git \
-              -E 'USB_WLAN|USB_NET|WIRELESS' \
-              drivers/net/wireless \
-              drivers/usb \
-              2>/dev/null \
-              | head -500 || true
-
-            echo
-            echo "============================================================"
-            echo "BOOT DIRECTORY"
-            echo "============================================================"
-
-            find arch/arm64/boot \
-              -maxdepth 2 \
-              -type f \
+      - name: Upload baseline kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: poco-x2-baseline-kernel
+          path: |
+            poco-x2-baseline-kernel.zip
+            kernel/out/.config  -type f \
               | sort \
               | head -500
 
