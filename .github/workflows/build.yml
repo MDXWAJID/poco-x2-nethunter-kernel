@@ -1,38 +1,23 @@
-name: POCO X2 - Build 1 - Baseline Kernel
+name: Build Phoenix baseline kernel
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Phoenix baseline kernel
     runs-on: ubuntu-24.04
 
     steps:
-
-      - name: Show machine
-        run: |
-          echo "CPU:"
-          nproc
-
-          echo
-          echo "MEMORY:"
-          free -h
-
-          echo
-          echo "STORAGE:"
-          df -h /
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-
+          sudo apt-get update
           sudo apt-get install -y \
             git \
             bc \
             bison \
             flex \
             build-essential \
+            gcc-aarch64-linux-gnu \
             libssl-dev \
             libelf-dev \
             device-tree-compiler \
@@ -40,37 +25,31 @@ jobs:
             rsync \
             unzip \
             zip \
-            python3 \
-            python3-pip
+            python3
 
-      - name: Clone kernel source
+      - name: Clone crDroid kernel
         run: |
           git clone \
             --depth=1 \
-            --single-branch \
-            --branch=16.0 \
+            --branch 16.0 \
             https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
             kernel
 
-      - name: Prepare output directory
-        run: |
-          mkdir -p kernel/out
-
-      - name: Show source
+      - name: Show source information
         working-directory: kernel
         run: |
-          echo "Commit:"
+          echo "===== SOURCE ====="
           git rev-parse HEAD
-
+          git log -1 --oneline
           echo
-          echo "Kernel:"
-          grep -E '^VERSION =|^PATCHLEVEL =|^SUBLEVEL =' Makefile
+          echo "===== KERNEL VERSION ====="
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile
 
-          echo
-          echo "Phoenix config:"
-          cat arch/arm64/configs/vendor/phoenix.config
+      - name: Create output directory
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/kernel/out"
 
-      - name: Create base Phoenix configuration
+      - name: Generate Phoenix base configuration
         working-directory: kernel
         run: |
           make \
@@ -84,7 +63,6 @@ jobs:
         run: |
           ./scripts/kconfig/merge_config.sh \
             -O "$PWD/out" \
-            "$PWD/out/.config" \
             "$PWD/arch/arm64/configs/vendor/phoenix.config"
 
       - name: Finalize configuration
@@ -93,33 +71,66 @@ jobs:
           make \
             O="$PWD/out" \
             ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
 
       - name: Verify Phoenix configuration
         working-directory: kernel
         run: |
+          set -e
+
+          CONFIG="$PWD/out/.config"
+
           echo "===== DEVICE ====="
-          grep '^CONFIG_MACH_XIAOMI_PHOENIX=' out/.config
+
+          grep -q '^CONFIG_MACH_XIAOMI_PHOENIX=y$' "$CONFIG"
+          echo "CONFIG_MACH_XIAOMI_PHOENIX=y OK"
 
           echo
-          echo "===== ATH9K HTC ====="
-          grep '^CONFIG_ATH9K_HTC=' out/.config || true
+          echo "===== ARCHITECTURE ====="
 
-          echo
-          echo "===== ATH9K ====="
-          grep '^CONFIG_ATH9K=' out/.config || true
-
-          echo
-          echo "===== MAC80211 ====="
-          grep '^CONFIG_MAC80211=' out/.config || true
-
-          echo
-          echo "===== CFG80211 ====="
-          grep '^CONFIG_CFG80211=' out/.config || true
+          grep -q '^CONFIG_ARM64=y$' "$CONFIG"
+          echo "CONFIG_ARM64=y OK"
 
           echo
           echo "===== USB ====="
-          grep '^CONFIG_USB=' out/.config || true
+
+          grep -q '^CONFIG_USB=y$' "$CONFIG"
+          echo "CONFIG_USB=y OK"
+
+          echo
+          echo "===== WIRELESS CORE ====="
+
+          grep -q '^CONFIG_WLAN=y$' "$CONFIG"
+          echo "CONFIG_WLAN=y OK"
+
+          grep -q '^CONFIG_CFG80211=' "$CONFIG"
+          echo "CONFIG_CFG80211 present"
+
+          grep -q '^CONFIG_MAC80211=' "$CONFIG"
+          echo "CONFIG_MAC80211 present"
+
+          echo
+          echo "===== AR9XXX STATUS ====="
+
+          if grep -q '^CONFIG_ATH9K_HTC=' "$CONFIG"; then
+            grep '^CONFIG_ATH9K_HTC=' "$CONFIG"
+          else
+            echo "CONFIG_ATH9K_HTC is not enabled yet"
+            echo "This is EXPECTED for the baseline build."
+          fi
+
+          echo
+          echo "===== CONFIGURATION CHECK PASSED ====="
+
+      - name: Show important configuration
+        working-directory: kernel
+        run: |
+          echo "===== IMPORTANT CONFIGURATION ====="
+
+          grep -E \
+            '^(CONFIG_MACH_XIAOMI_PHOENIX|CONFIG_ARM64|CONFIG_USB|CONFIG_WLAN|CONFIG_CFG80211|CONFIG_MAC80211|CONFIG_ATH|CONFIG_WLAN_VENDOR_ATH)' \
+            out/.config || true
 
       - name: Build kernel
         working-directory: kernel
@@ -129,66 +140,44 @@ jobs:
             O="$PWD/out" \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            KCFLAGS="-Wno-error" \
-            Image.gz \
-            modules
+            Image.gz modules
 
       - name: Show build output
         working-directory: kernel
         run: |
-          echo "===== KERNEL ====="
-          ls -lh out/arch/arm64/boot/Image.gz
+          echo "===== KERNEL OUTPUT ====="
+
+          ls -lh out/arch/arm64/boot/ || true
 
           echo
-          echo "===== DTB ====="
-          find out/arch/arm64/boot/dts \
-            -type f \
-            \( -name '*.dtb' -o -name '*.dtbo' \) \
-            | head -100 || true
+          echo "===== MODULE COUNT ====="
 
-          echo
-          echo "===== MODULES ====="
-          find out \
-            -type f \
-            -name '*.ko' \
-            | head -100 || true
+          find out -name '*.ko' -type f | wc -l
 
       - name: Package baseline artifacts
+        working-directory: kernel
         run: |
-          mkdir -p artifacts
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
 
-          cp kernel/out/arch/arm64/boot/Image.gz \
-            artifacts/Image.gz
+          cp out/arch/arm64/boot/Image.gz \
+            "$GITHUB_WORKSPACE/artifacts/Image.gz"
 
-          cp kernel/out/.config \
-            artifacts/phoenix.config
+          cp out/.config \
+            "$GITHUB_WORKSPACE/artifacts/kernel.config"
 
-          find kernel/out \
-            -type f \
+          find out \
             -name '*.ko' \
-            -exec cp --parents {} artifacts/ \; || true
-
-          cd artifacts
-          zip -r ../poco-x2-baseline-kernel.zip .
+            -type f \
+            -exec cp --parents {} "$GITHUB_WORKSPACE/artifacts/" \;
 
       - name: Upload baseline kernel
         uses: actions/upload-artifact@v4
         with:
-          name: poco-x2-baseline-kernel
-          path: |
-            poco-x2-baseline-kernel.zip
-            kernel/out/.config  -type f \
-              | sort \
-              | head -500
-              } > "$REPORT"
+          name: phoenix-baseline-kernel
+          path: artifacts/
 
-            echo
-            echo "Audit report created:"
-             ls -lh "$REPORT"
-
-      - name: Upload audit report
-        uses: actions/upload-artifact@v4
-        with:
-          name: poco-x2-source-audit
-          path: audit/source-audit.txt
-          if-no-files-found: error
+      - name: Complete
+        run: |
+          echo "======================================"
+          echo " PHOENIX BASELINE BUILD SUCCESSFUL"
+          echo "======================================"
