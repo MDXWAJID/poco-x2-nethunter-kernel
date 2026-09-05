@@ -9,23 +9,33 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+
       - name: Show runner information
         run: |
-          echo "===== CPU ====="
+          echo "========================================"
+          echo "        GITHUB RUNNER INFORMATION"
+          echo "========================================"
+
+          echo
+          echo "CPU:"
           nproc
 
-          echo "===== MEMORY ====="
+          echo
+          echo "MEMORY:"
           free -h
 
-          echo "===== STORAGE ====="
-          df -h
+          echo
+          echo "STORAGE:"
+          df -h /
 
-          echo "===== OS ====="
-          lsb_release -a || true
+          echo
+          echo "OS:"
+          cat /etc/os-release
 
       - name: Install basic tools
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
+
           sudo apt-get install -y \
             git \
             bc \
@@ -40,121 +50,320 @@ jobs:
             zip \
             python3
 
-      - name: Clone kernel source
+      - name: Clone crDroid kernel source
         run: |
           git clone \
             --depth=1 \
+            --single-branch \
             --branch=16.0 \
             https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
             kernel
 
-      - name: Show source information
+      - name: Create audit directory
+        run: |
+          mkdir -p audit
+
+      - name: Record kernel source information
         working-directory: kernel
         run: |
-          echo "===== BRANCH ====="
+          echo "========================================"
+          echo "        KERNEL SOURCE INFORMATION"
+          echo "========================================"
+
+          echo
+          echo "Repository:"
+          git remote get-url origin
+
+          echo
+          echo "Branch:"
           git branch --show-current
 
-          echo "===== COMMIT ====="
+          echo
+          echo "Commit:"
           git rev-parse HEAD
 
-          echo "===== COMMIT DATE ====="
-          git log -1 --format='%H%n%ad%n%s'
+          echo
+          echo "Commit date:"
+          git log -1 --format='%ad' --date=iso
 
-          echo "===== KERNEL VERSION ====="
-          make kernelversion
+          echo
+          echo "Commit subject:"
+          git log -1 --format='%s'
 
-          echo "===== MAKEFILE ====="
-          head -40 Makefile
+          echo
+          echo "Kernel version from Makefile:"
+          grep -E '^VERSION =|^PATCHLEVEL =|^SUBLEVEL =' Makefile
 
-      - name: Search Phoenix configuration
+          echo
+          echo "Calculated kernel version:"
+          make -s kernelversion 2>/dev/null || true
+
+      - name: Search Phoenix device references
         working-directory: kernel
         run: |
-          echo "===== PHOENIX REFERENCES ====="
+          echo "========================================"
+          echo "        PHOENIX REFERENCES"
+          echo "========================================"
+
           grep -Rni \
             --exclude-dir=.git \
             -E 'phoenix|phoenixin' \
             arch/arm64/configs \
             arch/arm64/boot/dts \
-            2>/dev/null | head -200 || true
+            2>/dev/null \
+            | head -300 || true
 
-      - name: Search wireless driver
+      - name: Search ATH9K HTC support
         working-directory: kernel
         run: |
-          echo "===== ATH9K REFERENCES ====="
+          echo "========================================"
+          echo "        ATH9K / ATH9K_HTC"
+          echo "========================================"
+
+          find drivers -type f \
+            \( -iname '*ath9k*' -o -iname '*htc*' \) \
+            | sort || true
+
+          echo
+          echo "Configuration references:"
+
           grep -Rni \
             --exclude-dir=.git \
-            -E 'ATH9K|ATH9K_HTC|ath9k_htc' \
+            -E 'ATH9K|ATH9K_HTC|ATH9K_HTC_DEBUGFS' \
             drivers/net/wireless \
             drivers \
-            2>/dev/null | head -300 || true
+            2>/dev/null \
+            | head -300 || true
 
       - name: Search USB wireless support
         working-directory: kernel
         run: |
-          echo "===== USB WIRELESS REFERENCES ====="
+          echo "========================================"
+          echo "        USB WIRELESS SUPPORT"
+          echo "========================================"
+
           grep -Rni \
             --exclude-dir=.git \
-            -E 'USB_NET|USB_WLAN|WIRELESS' \
+            -E 'USB_WLAN|USB_NET|WIRELESS' \
             drivers/net/wireless \
             drivers/usb \
-            2>/dev/null | head -300 || true
+            2>/dev/null \
+            | head -300 || true
 
-      - name: List configuration files
+      - name: Find ARM64 configuration files
         working-directory: kernel
         run: |
-          echo "===== ARM64 CONFIGS ====="
-          find arch/arm64/configs -maxdepth 2 -type f | sort
+          echo "========================================"
+          echo "        ARM64 CONFIG FILES"
+          echo "========================================"
 
-      - name: Search for defconfig names
+          find arch/arm64/configs \
+            -type f \
+            | sort
+
+      - name: Search Phoenix defconfig names
         working-directory: kernel
         run: |
-          echo "===== DEFCONFIG REFERENCES ====="
+          echo "========================================"
+          echo "        POSSIBLE PHOENIX CONFIGS"
+          echo "========================================"
+
           find . \
             -type f \
             -not -path './.git/*' \
-            \( -name '*defconfig*' -o -name '*config*' \) \
-            | sort | head -500
+            \( \
+              -iname '*phoenix*' \
+              -o -iname '*phoenixin*' \
+              -o -iname '*defconfig*' \
+            \) \
+            | sort \
+            | head -500
 
-      - name: Show Make targets
+      - name: Search build configuration references
         working-directory: kernel
         run: |
-          make help 2>/dev/null | head -200 || true
+          echo "========================================"
+          echo "        BUILD CONFIG REFERENCES"
+          echo "========================================"
 
-      - name: Save audit
+          grep -Rni \
+            --exclude-dir=.git \
+            -E 'phoenix_defconfig|phoenixin_defconfig|sm6150' \
+            Makefile \
+            arch/arm64 \
+            scripts \
+            2>/dev/null \
+            | head -300 || true
+
+      - name: Inspect kernel architecture
+        working-directory: kernel
         run: |
-          mkdir -p audit
+          echo "========================================"
+          echo "        ARCHITECTURE"
+          echo "========================================"
+
+          echo
+          echo "ARM64 directory:"
+          ls -la arch/arm64 | head -50
+
+          echo
+          echo "ARM64 boot directory:"
+          ls -la arch/arm64/boot | head -100
+
+      - name: Create complete audit report
+        run: |
+          REPORT="$GITHUB_WORKSPACE/audit/source-audit.txt"
 
           {
-            echo "===== RUNNER ====="
-            nproc
-            free -h
-            df -h
+            echo "============================================================"
+            echo "POCO X2 / PHOENIX crDroid KERNEL SOURCE AUDIT"
+            echo "============================================================"
 
             echo
-            echo "===== KERNEL COMMIT ====="
-            cd kernel
+            echo "DATE:"
+            date -u
+
+            echo
+            echo "============================================================"
+            echo "RUNNER"
+            echo "============================================================"
+
+            echo
+            echo "CPU:"
+            nproc
+
+            echo
+            echo "MEMORY:"
+            free -h
+
+            echo
+            echo "STORAGE:"
+            df -h /
+
+            echo
+            echo "============================================================"
+            echo "SOURCE"
+            echo "============================================================"
+
+            cd "$GITHUB_WORKSPACE/kernel"
+
+            echo
+            echo "Repository:"
+            git remote get-url origin
+
+            echo
+            echo "Branch:"
+            git branch --show-current
+
+            echo
+            echo "Commit:"
             git rev-parse HEAD
 
             echo
-            echo "===== KERNEL VERSION ====="
-            make kernelversion
+            echo "Commit date:"
+            git log -1 --format='%ad' --date=iso
 
             echo
-            echo "===== CONFIG FILES ====="
-            find arch/arm64/configs -maxdepth 2 -type f | sort
+            echo "Commit subject:"
+            git log -1 --format='%s'
 
             echo
-            echo "===== ATH9K ====="
+            echo "Kernel Makefile version:"
+            grep -E '^VERSION =|^PATCHLEVEL =|^SUBLEVEL =' Makefile
+
+            echo
+            echo "Kernel version:"
+            make -s kernelversion 2>/dev/null || true
+
+            echo
+            echo "============================================================"
+            echo "PHOENIX REFERENCES"
+            echo "============================================================"
+
             grep -Rni \
               --exclude-dir=.git \
-              -E 'ATH9K|ATH9K_HTC|ath9k_htc' \
+              -E 'phoenix|phoenixin' \
+              arch/arm64/configs \
+              arch/arm64/boot/dts \
+              2>/dev/null \
+              | head -500 || true
+
+            echo
+            echo "============================================================"
+            echo "ATH9K / ATH9K_HTC"
+            echo "============================================================"
+
+            find drivers -type f \
+              \( -iname '*ath9k*' -o -iname '*htc*' \) \
+              | sort || true
+
+            echo
+            grep -Rni \
+              --exclude-dir=.git \
+              -E 'ATH9K|ATH9K_HTC|ATH9K_HTC_DEBUGFS' \
               drivers/net/wireless \
-              drivers 2>/dev/null | head -300 || true
+              drivers \
+              2>/dev/null \
+              | head -500 || true
 
-          } > ../audit/source-audit.txt
+            echo
+            echo "============================================================"
+            echo "ARM64 CONFIGURATION FILES"
+            echo "============================================================"
 
-      - name: Upload audit
+            find arch/arm64/configs \
+              -type f \
+              | sort
+
+            echo
+            echo "============================================================"
+            echo "POSSIBLE PHOENIX CONFIGURATIONS"
+            echo "============================================================"
+
+            find . \
+              -type f \
+              -not -path './.git/*' \
+              \( \
+                -iname '*phoenix*' \
+                -o -iname '*phoenixin*' \
+                -o -iname '*defconfig*' \
+              \) \
+              | sort \
+              | head -1000
+
+            echo
+            echo "============================================================"
+            echo "USB / WIRELESS REFERENCES"
+            echo "============================================================"
+
+            grep -Rni \
+              --exclude-dir=.git \
+              -E 'USB_WLAN|USB_NET|WIRELESS' \
+              drivers/net/wireless \
+              drivers/usb \
+              2>/dev/null \
+              | head -500 || true
+
+            echo
+            echo "============================================================"
+            echo "BOOT DIRECTORY"
+            echo "============================================================"
+
+            find arch/arm64/boot \
+              -maxdepth 2 \
+              -type f \
+              | sort \
+              | head -500
+
+          } > "$REPORT"
+
+          echo
+          echo "Audit report created:"
+          ls -lh "$REPORT"
+
+      - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
           name: poco-x2-source-audit
           path: audit/source-audit.txt
+          if-no-files-found: error
