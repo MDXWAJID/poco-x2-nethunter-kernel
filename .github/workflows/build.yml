@@ -10,7 +10,7 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. CHECK OUT THIS GITHUB REPOSITORY
+      # 1. CHECKOUT
       # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,11 +44,18 @@ jobs:
 
 
       # ============================================================
-      # 3. SHOW RUNNER INFORMATION
+      # 3. SHOW ENVIRONMENT
       # ============================================================
       - name: Show build environment
         run: |
-          echo "===== RUNNER ====="
+          set -e
+
+          echo "========================================"
+          echo "          BUILD ENVIRONMENT"
+          echo "========================================"
+
+          echo
+          echo "===== HOST ====="
           uname -a
 
           echo
@@ -89,51 +96,59 @@ jobs:
           fi
 
           echo
-          echo "===== KERNEL DIRECTORY ====="
+          echo "===== KERNEL SOURCE ====="
           ls -la kernel
 
           echo
-          echo "===== GIT INFORMATION ====="
+          echo "===== GIT ====="
           cd kernel
+
           git remote -v || true
           git branch --show-current || true
           git log -1 --oneline || true
 
 
       # ============================================================
-      # 5. VERIFY KERNEL SOURCE
+      # 5. VERIFY SOURCE
       # ============================================================
       - name: Verify kernel source
         working-directory: kernel
         run: |
           set -e
 
-          echo "===== KERNEL VERSION FROM MAKEFILE ====="
+          echo "========================================"
+          echo "          SOURCE VERIFICATION"
+          echo "========================================"
+
+          echo
+          echo "===== KERNEL VERSION ====="
 
           grep '^VERSION[[:space:]]*=' Makefile
           grep '^PATCHLEVEL[[:space:]]*=' Makefile
           grep '^SUBLEVEL[[:space:]]*=' Makefile
 
           echo
-          echo "===== EXPECTED PHOENIX CONFIG ====="
+          echo "===== PHOENIX CONFIG FILE ====="
 
-          test -f arch/arm64/configs/vendor/phoenix.config
+          test -f \
+            arch/arm64/configs/vendor/phoenix.config
 
           grep -n \
             'CONFIG_MACH_XIAOMI_PHOENIX' \
-            arch/arm64/configs/vendor/phoenix.config || true
+            arch/arm64/configs/vendor/phoenix.config
 
           echo
-          echo "===== ATH9K HTC SOURCE ====="
+          echo "===== ATH9K HTC ====="
 
-          test -f drivers/net/wireless/ath/ath9k/Kconfig
+          test -f \
+            drivers/net/wireless/ath/ath9k/Kconfig
 
           grep -n \
             'config ATH9K_HTC' \
             drivers/net/wireless/ath/ath9k/Kconfig || true
 
           echo
-          echo "===== AR9271 REFERENCE ====="
+          echo "===== AR9271 ====="
 
           grep -n \
             'AR9271' \
@@ -141,16 +156,19 @@ jobs:
 
 
       # ============================================================
-      # 6. GENERATE PHOENIX BASE CONFIGURATION
+      # 6. GENERATE BASE ARM64 CONFIGURATION
       # ============================================================
       - name: Generate Phoenix base configuration
         working-directory: kernel
         run: |
           set -e
 
-          echo "===== GENERATING BASE CONFIGURATION ====="
+          echo "========================================"
+          echo "     GENERATING BASE CONFIGURATION"
+          echo "========================================"
 
           rm -rf out
+
           mkdir -p out
 
           make \
@@ -160,12 +178,20 @@ jobs:
             vendor/sdmsteppe-perf_defconfig
 
           echo
-          echo "===== BASE CONFIG GENERATED ====="
+          echo "===== BASE CONFIG CREATED ====="
 
-          test -f "$PWD/out/.config"
+          test -f \
+            "$PWD/out/.config"
 
           echo
-          echo "===== BASE PHOENIX VALUE ====="
+          echo "===== BASE ARM64 ====="
+
+          grep -n \
+            '^CONFIG_ARM64=' \
+            "$PWD/out/.config" || true
+
+          echo
+          echo "===== BASE PHOENIX ====="
 
           grep -n \
             'CONFIG_MACH_XIAOMI_PHOENIX' \
@@ -173,21 +199,26 @@ jobs:
 
 
       # ============================================================
-      # 7. INSPECT PHOENIX SOURCE CONFIG
+      # 7. INSPECT PHOENIX FRAGMENT
       # ============================================================
-      - name: Inspect Phoenix source configuration
+      - name: Inspect Phoenix configuration
         working-directory: kernel
         run: |
           set -e
 
-          echo "===== PHOENIX SOURCE CONFIG ====="
+          echo "========================================"
+          echo "       PHOENIX CONFIGURATION"
+          echo "========================================"
+
+          echo
+          echo "===== PHOENIX SOURCE ====="
 
           grep -n \
             'CONFIG_MACH_XIAOMI_PHOENIX' \
-            "$PWD/arch/arm64/configs/vendor/phoenix.config" || true
+            "$PWD/arch/arm64/configs/vendor/phoenix.config"
 
           echo
-          echo "===== COMPLETE PHOENIX CONFIG ====="
+          echo "===== FULL PHOENIX CONFIG ====="
 
           cat \
             "$PWD/arch/arm64/configs/vendor/phoenix.config"
@@ -195,14 +226,21 @@ jobs:
 
       # ============================================================
       # 8. MERGE PHOENIX CONFIGURATION
+      #
+      # IMPORTANT:
+      # ARCH=arm64 is explicitly passed to merge_config.sh.
       # ============================================================
       - name: Merge Phoenix configuration
         working-directory: kernel
         run: |
           set -o pipefail
 
-          echo "===== MERGING PHOENIX CONFIGURATION ====="
+          echo "========================================"
+          echo "       MERGING PHOENIX CONFIG"
+          echo "========================================"
 
+          ARCH=arm64 \
+          CROSS_COMPILE=aarch64-linux-gnu- \
           ./scripts/kconfig/merge_config.sh \
             -O "$PWD/out" \
             "$PWD/out/.config" \
@@ -210,25 +248,28 @@ jobs:
             2>&1 | tee "$PWD/out/phoenix-merge.log"
 
           echo
-          echo "===== MERGE COMPLETED ====="
-
-          echo
           echo "===== CONFIG AFTER MERGE ====="
 
           grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            '^CONFIG_ARM64=' \
+            "$PWD/out/.config" || true
+
+          grep -n \
+            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
             "$PWD/out/.config" || true
 
 
       # ============================================================
-      # 9. FINALIZE CONFIGURATION
+      # 9. FINALIZE ARM64 CONFIGURATION
       # ============================================================
       - name: Finalize configuration
         working-directory: kernel
         run: |
           set -e
 
-          echo "===== RUNNING OLDDEFCONFIG ====="
+          echo "========================================"
+          echo "          FINALIZING CONFIG"
+          echo "========================================"
 
           make \
             O="$PWD/out" \
@@ -237,48 +278,80 @@ jobs:
             olddefconfig
 
           echo
-          echo "===== CONFIG AFTER OLDDEFCONFIG ====="
+          echo "===== FINAL CONFIG ====="
 
+          echo
+          echo "ARM64:"
           grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            '^CONFIG_ARM64=' \
+            "$PWD/out/.config" || true
+
+          echo
+          echo "PHOENIX:"
+          grep -n \
+            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
             "$PWD/out/.config" || true
 
 
       # ============================================================
-      # 10. DIAGNOSE FINAL CONFIGURATION
+      # 10. VERIFY FINAL CONFIGURATION
       # ============================================================
-      - name: Diagnose final Phoenix configuration
+      - name: Verify final Phoenix configuration
         working-directory: kernel
         run: |
           set -e
 
           CONFIG="$PWD/out/.config"
 
-          echo
-          echo "============================================================"
-          echo "              FINAL CONFIGURATION DIAGNOSTIC"
-          echo "============================================================"
+          echo "========================================"
+          echo "       FINAL CONFIG VERIFICATION"
+          echo "========================================"
 
           echo
-          echo "===== DEVICE ====="
-
-          grep -n \
-            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
-            "$CONFIG" || true
-
-          echo
-          echo "===== ALL PHOENIX SETTINGS ====="
-
-          grep -in \
-            'PHOENIX' \
-            "$CONFIG" || true
-
-          echo
-          echo "===== ARCHITECTURE ====="
+          echo "===== ARM64 ====="
 
           grep -n \
             '^CONFIG_ARM64=' \
-            "$CONFIG" || true
+            "$CONFIG"
+
+          if ! grep -q \
+            '^CONFIG_ARM64=y$' \
+            "$CONFIG"; then
+
+            echo
+            echo "ERROR: ARM64 configuration is missing."
+
+            exit 1
+          fi
+
+          echo "CONFIG_ARM64=y OK"
+
+
+          echo
+          echo "===== PHOENIX ====="
+
+          grep -n \
+            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
+            "$CONFIG"
+
+          if ! grep -q \
+            '^CONFIG_MACH_XIAOMI_PHOENIX=y$' \
+            "$CONFIG"; then
+
+            echo
+            echo "ERROR: Phoenix configuration is missing."
+
+            echo
+            echo "Relevant Phoenix settings:"
+            grep -i \
+              'PHOENIX' \
+              "$CONFIG" || true
+
+            exit 1
+          fi
+
+          echo "CONFIG_MACH_XIAOMI_PHOENIX=y OK"
+
 
           echo
           echo "===== USB ====="
@@ -287,12 +360,14 @@ jobs:
             '^CONFIG_USB=' \
             "$CONFIG" || true
 
+
           echo
-          echo "===== WIRELESS ====="
+          echo "===== WLAN ====="
 
           grep -nE \
             '^(CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=)' \
             "$CONFIG" || true
+
 
           echo
           echo "===== ATH9K HTC ====="
@@ -302,43 +377,40 @@ jobs:
             "$CONFIG" || \
             echo "CONFIG_ATH9K_HTC is not enabled yet"
 
-          echo
-          echo "===== PHOENIX SOURCE VALUE ====="
-
-          grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
-            "$PWD/arch/arm64/configs/vendor/phoenix.config" || true
 
           echo
-          echo "===== BASE CONFIG VALUE ====="
+          echo "========================================"
+          echo "       PHOENIX CONFIGURATION PASSED"
+          echo "========================================"
 
-          grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
-            "$PWD/out/.config" || true
 
-          echo
-          echo "===== MERGE LOG ====="
+      # ============================================================
+      # 11. SHOW MERGE WARNINGS
+      # ============================================================
+      - name: Show configuration warnings
+        if: always()
+        working-directory: kernel
+        run: |
+          echo "========================================"
+          echo "       CONFIGURATION MERGE LOG"
+          echo "========================================"
 
           if [ -f "$PWD/out/phoenix-merge.log" ]; then
             cat "$PWD/out/phoenix-merge.log"
           else
-            echo "Merge log was not created."
+            echo "No merge log found."
           fi
-
-          echo
-          echo "============================================================"
-          echo "          END CONFIGURATION DIAGNOSTIC"
-          echo "============================================================"
 
 
       # ============================================================
-      # 11. UPLOAD DIAGNOSTIC ARTIFACT
+      # 12. UPLOAD DIAGNOSTIC ARTIFACT
       # ============================================================
       - name: Upload configuration diagnostic
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phoenix-kernel-config-diagnostic
+          include-hidden-files: true
           path: |
             kernel/out/.config
             kernel/out/phoenix-merge.log
