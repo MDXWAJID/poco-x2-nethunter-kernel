@@ -1,4 +1,4 @@
-name: POCO X2 NetHunter Kernel
+name: POCO X2 NetHunter Kernel Build
 
 on:
   workflow_dispatch:
@@ -7,8 +7,15 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      ARCH: arm64
+      CLANG_TRIPLE: aarch64-linux-gnu-
+      CROSS_COMPILE: aarch64-linux-androidkernel-
+      LLVM: "1"
+      LLVM_IAS: "1"
+
     steps:
-      - name: Checkout repository
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
 
       - name: Install build dependencies
@@ -16,10 +23,10 @@ jobs:
           set -e
           sudo apt-get update
           sudo apt-get install -y \
-            git bc bison flex build-essential \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            bc bison flex build-essential \
+            clang llvm lld \
             libssl-dev libelf-dev device-tree-compiler \
-            cpio rsync unzip zip python3
+            cpio rsync python3 unzip zip git
 
       - name: Prepare kernel source
         run: |
@@ -27,27 +34,51 @@ jobs:
 
           if [ ! -d kernel ]; then
             git clone \
-              --depth=1 \
               --branch 16.0 \
+              --depth=1 \
               https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
               kernel
           fi
 
-          test -f kernel/arch/arm64/configs/vendor/phoenix.config
-          test -f kernel/drivers/net/wireless/ath/ath9k/Kconfig
+          cd kernel
+          git log -1 --oneline
+          test -f Makefile
+          test -f Kconfig
+          test -f arch/arm64/configs/vendor/phoenix.config
 
-      - name: Generate Phoenix configuration
+      - name: Verify toolchain
+        run: |
+          set -e
+          echo "===== CLANG ====="
+          clang --version
+          echo
+          echo "===== LLVM ====="
+          llvm-config --version
+          echo
+          echo "===== LLD ====="
+          ld.lld --version
+          echo
+          echo "===== TARGET ====="
+          echo "ARCH=$ARCH"
+          echo "CLANG_TRIPLE=$CLANG_TRIPLE"
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          echo "LLVM=$LLVM"
+          echo "LLVM_IAS=$LLVM_IAS"
+
+      - name: Generate base Phoenix configuration
         working-directory: kernel
         run: |
           set -e
-
           rm -rf out
           mkdir -p out
 
           make \
             O="$PWD/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CLANG_TRIPLE="$CLANG_TRIPLE" \
+            LLVM="$LLVM" \
+            LLVM_IAS="$LLVM_IAS" \
             vendor/sdmsteppe-perf_defconfig
 
           test -f "$PWD/out/.config"
@@ -57,25 +88,22 @@ jobs:
         run: |
           set -o pipefail
 
-          ARCH=arm64 \
-          CROSS_COMPILE=aarch64-linux-gnu- \
+          ARCH="$ARCH" \
+          CROSS_COMPILE="$CROSS_COMPILE" \
+          CLANG_TRIPLE="$CLANG_TRIPLE" \
+          LLVM="$LLVM" \
+          LLVM_IAS="$LLVM_IAS" \
           ./scripts/kconfig/merge_config.sh \
             -O "$PWD/out" \
             "$PWD/out/.config" \
             "$PWD/arch/arm64/configs/vendor/phoenix.config" \
             2>&1 | tee "$PWD/out/phoenix-merge.log"
 
-      - name: Enable NetHunter wireless driver
+      - name: Enable AR9271 driver
         working-directory: kernel
         run: |
           set -e
-
           CONFIG="$PWD/out/.config"
-
-          echo "===== BEFORE ATH9K HTC ====="
-          grep -E \
-            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_ATH9K=|CONFIG_ATH9K_HTC=)' \
-            "$CONFIG" || true
 
           ./scripts/config --file "$CONFIG" \
             --enable USB \
@@ -88,13 +116,6 @@ jobs:
             --enable ATH9K_COMMON \
             --module ATH9K_HTC
 
-          echo
-          echo "===== AFTER ATH9K HTC ====="
-
-          grep -E \
-            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_WLAN_VENDOR_ATH=|CONFIG_ATH9K=|CONFIG_ATH9K_HW=|CONFIG_ATH9K_COMMON=|CONFIG_ATH9K_HTC=)' \
-            "$CONFIG" || true
-
       - name: Finalize configuration
         working-directory: kernel
         run: |
@@ -102,175 +123,121 @@ jobs:
 
           make \
             O="$PWD/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CLANG_TRIPLE="$CLANG_TRIPLE" \
+            LLVM="$LLVM" \
+            LLVM_IAS="$LLVM_IAS" \
             olddefconfig
 
       - name: Verify final configuration
         working-directory: kernel
         run: |
           set -e
-
           CONFIG="$PWD/out/.config"
 
-          echo "===== FINAL DEVICE ====="
-          grep '^CONFIG_MACH_XIAOMI_PHOENIX=' "$CONFIG"
+          echo "===== DEVICE ====="
+          grep -E '^CONFIG_(ARM64|ARCH_QCOM|ARCH_SM6150|MACH_XIAOMI_PHOENIX)=' "$CONFIG" || true
 
-          echo "===== FINAL ARCH ====="
-          grep '^CONFIG_ARM64=' "$CONFIG"
+          echo
+          echo "===== USB / WIFI ====="
+          grep -E '^CONFIG_(USB|WLAN|CFG80211|MAC80211|WLAN_VENDOR_ATH)=' "$CONFIG" || true
 
-          echo "===== FINAL USB/WIRELESS ====="
-          grep -E \
-            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_WLAN_VENDOR_ATH=)' \
-            "$CONFIG"
+          echo
+          echo "===== ATH9K ====="
+          grep -E '^CONFIG_(ATH9K|ATH9K_HW|ATH9K_COMMON|ATH9K_HTC|MODULES)=' "$CONFIG" || true
 
-          echo "===== FINAL ATH9K ====="
-          grep -E \
-            '^(CONFIG_ATH9K=|CONFIG_ATH9K_HW=|CONFIG_ATH9K_COMMON=|CONFIG_ATH9K_HTC=)' \
-            "$CONFIG"
-
-          test "$(grep '^CONFIG_MACH_XIAOMI_PHOENIX=' "$CONFIG")" = "CONFIG_MACH_XIAOMI_PHOENIX=y"
           test "$(grep '^CONFIG_ARM64=' "$CONFIG")" = "CONFIG_ARM64=y"
+          test "$(grep '^CONFIG_MACH_XIAOMI_PHOENIX=' "$CONFIG")" = "CONFIG_MACH_XIAOMI_PHOENIX=y"
           test "$(grep '^CONFIG_USB=' "$CONFIG")" = "CONFIG_USB=y"
           test "$(grep '^CONFIG_WLAN=' "$CONFIG")" = "CONFIG_WLAN=y"
           test "$(grep '^CONFIG_CFG80211=' "$CONFIG")" = "CONFIG_CFG80211=y"
           test "$(grep '^CONFIG_MAC80211=' "$CONFIG")" = "CONFIG_MAC80211=y"
           test "$(grep '^CONFIG_ATH9K_HTC=' "$CONFIG")" = "CONFIG_ATH9K_HTC=m"
 
-      - name: Build kernel
+      - name: Build kernel and modules
         working-directory: kernel
         run: |
-          set -e
+          set -o pipefail
 
           make \
             -j"$(nproc)" \
             O="$PWD/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
+            ARCH="$ARCH" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CLANG_TRIPLE="$CLANG_TRIPLE" \
+            LLVM="$LLVM" \
+            LLVM_IAS="$LLVM_IAS" \
             Image.gz \
             modules \
-            dtbs
+            dtbs \
+            2>&1 | tee "$PWD/out/build.log"
 
-      - name: Collect kernel outputs
+      - name: Verify build outputs
         working-directory: kernel
         run: |
           set -e
 
-          rm -rf "$PWD/package"
-          mkdir -p "$PWD/package/modules"
+          test -s "$PWD/out/arch/arm64/boot/Image.gz"
 
-          test -f "$PWD/out/arch/arm64/boot/Image.gz"
+          echo "===== KERNEL ====="
+          ls -lh "$PWD/out/arch/arm64/boot/Image.gz"
 
-          cp \
-            "$PWD/out/arch/arm64/boot/Image.gz" \
-            "$PWD/package/Image.gz"
+          echo
+          echo "===== ATH9K HTC MODULE ====="
+          find "$PWD/out" -type f -name 'ath9k_htc.ko' -print -exec ls -lh {} \;
 
-          find "$PWD/out" \
-            -type f \
-            -name '*.dtb' \
-            -exec cp {} "$PWD/package/" \;
+          test -n "$(find "$PWD/out" -type f -name 'ath9k_htc.ko' -print -quit)"
+
+          echo
+          echo "===== DTB FILES ====="
+          find "$PWD/out" -type f -name '*.dtb' -print
+
+      - name: Collect kernel artifact
+        working-directory: kernel
+        run: |
+          set -e
+
+          rm -rf package
+          mkdir -p package/modules
+          mkdir -p package/dtb
+
+          cp "$PWD/out/arch/arm64/boot/Image.gz" "$PWD/package/Image.gz"
 
           find "$PWD/out" \
             -type f \
             -name 'ath9k_htc.ko' \
             -exec cp {} "$PWD/package/modules/" \;
 
-          echo "===== PACKAGE CONTENTS ====="
-          find "$PWD/package" -type f -print
-
-      - name: Prepare AnyKernel3
-        run: |
-          set -e
-
-          git clone \
-            --depth=1 \
-            https://github.com/osm0sis/AnyKernel3.git \
-            anykernel3
-
-          rm -rf anykernel3/.git
-
-          rm -rf anykernel3/modules
-          mkdir -p anykernel3/modules
-
-          cp kernel/package/Image.gz anykernel3/
-
-          find kernel/package/modules \
-            -type f \
-            -name '*.ko' \
-            -exec cp {} anykernel3/modules/ \;
-
-          find kernel/package \
-            -maxdepth 1 \
+          find "$PWD/out" \
             -type f \
             -name '*.dtb' \
-            -exec cp {} anykernel3/ \;
+            -exec cp {} "$PWD/package/dtb/" \;
 
-      - name: Configure AnyKernel3
-        run: |
-          set -e
+          cp "$PWD/out/.config" "$PWD/package/config"
+          cp "$PWD/out/build.log" "$PWD/package/build.log"
 
-          cat > anykernel3/anykernel.sh <<'EOF'
-          # AnyKernel3 Ramdisk Mod Script
-          # POCO X2 / Phoenix
-          properties() { '
-          kernel.string=POCO X2 NetHunter Kernel
-          do.devicecheck=0
-          do.modules=1
-          do.systemless=0
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=phoenix
-          device.name2=phoenixin
-          '; }
+          echo "===== FINAL ARTIFACT ====="
+          find "$PWD/package" -type f -print
 
-          block=boot;
-          is_slot_device=0;
-
-          . tools/ak3-core.sh;
-          dump_boot;
-          split_boot;
-
-          replace_kernel;
-          patch_cmdline;
-
-          if [ -d modules ]; then
-            bind_mount_modules;
-            cp -af modules/* "$ramdisk/lib/modules/" 2>/dev/null || true;
-          fi
-
-          flash_boot;
-          ```
-
-      - name: Build flashable kernel ZIP
-        run: |
-          set -e
-
-          cd anykernel3
-
-          zip -r9 \
-            ../POCO-X2-NetHunter-Kernel.zip \
-            . \
-            -x '*.git*' \
-            -x 'README.md'
-
-      - name: Upload flashable kernel ZIP
+      - name: Upload successful kernel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: POCO-X2-NetHunter-Kernel
-          path: POCO-X2-NetHunter-Kernel.zip
+          name: POCO-X2-NetHunter-Kernel-Build
+          path: kernel/package/**
           if-no-files-found: error
 
-      - name: Upload raw kernel and diagnostics
-        uses: actions/upload-artifact@v4
+      - name: Upload diagnostics on every run
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: POCO-X2-NetHunter-Build-Diagnostics
+          name: POCO-X2-NetHunter-Diagnostics
           include-hidden-files: true
           path: |
             kernel/out/.config
             kernel/out/phoenix-merge.log
-            kernel/out/arch/arm64/boot/Image.gz
+            kernel/out/build.log
+            kernel/out/arch/arm64/boot/**
             kernel/out/**/*.dtb
             kernel/out/**/*.ko
-            kernel/package/**
           if-no-files-found: warn
