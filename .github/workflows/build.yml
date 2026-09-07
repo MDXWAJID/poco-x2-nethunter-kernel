@@ -8,167 +8,40 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # ============================================================
-      # 2. INSTALL BUILD DEPENDENCIES
-      # ============================================================
       - name: Install build dependencies
         run: |
           set -e
-
           sudo apt-get update
-
           sudo apt-get install -y \
-            git \
-            bc \
-            bison \
-            flex \
-            build-essential \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libssl-dev \
-            libelf-dev \
-            device-tree-compiler \
-            cpio \
-            rsync \
-            unzip \
-            zip \
-            python3
+            git bc bison flex build-essential \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libssl-dev libelf-dev device-tree-compiler \
+            cpio rsync unzip zip python3
 
-
-      # ============================================================
-      # 3. SHOW ENVIRONMENT
-      # ============================================================
-      - name: Show build environment
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "          BUILD ENVIRONMENT"
-          echo "========================================"
-
-          echo
-          echo "===== HOST ====="
-          uname -a
-
-          echo
-          echo "===== CPU ====="
-          nproc
-
-          echo
-          echo "===== MEMORY ====="
-          free -h
-
-          echo
-          echo "===== DISK ====="
-          df -h
-
-          echo
-          echo "===== CROSS COMPILER ====="
-          aarch64-linux-gnu-gcc --version
-
-
-      # ============================================================
-      # 4. PREPARE KERNEL SOURCE
-      # ============================================================
       - name: Prepare kernel source
         run: |
           set -e
 
-          if [ ! -d "kernel" ]; then
-            echo "kernel directory does not exist."
-            echo "Cloning crDroid SM6150 kernel source..."
-
+          if [ ! -d kernel ]; then
             git clone \
               --depth=1 \
               --branch 16.0 \
               https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
               kernel
-          else
-            echo "kernel directory already exists."
           fi
 
-          echo
-          echo "===== KERNEL SOURCE ====="
-          ls -la kernel
+          test -f kernel/arch/arm64/configs/vendor/phoenix.config
+          test -f kernel/drivers/net/wireless/ath/ath9k/Kconfig
 
-          echo
-          echo "===== GIT ====="
-          cd kernel
-
-          git remote -v || true
-          git branch --show-current || true
-          git log -1 --oneline || true
-
-
-      # ============================================================
-      # 5. VERIFY SOURCE
-      # ============================================================
-      - name: Verify kernel source
+      - name: Generate Phoenix configuration
         working-directory: kernel
         run: |
           set -e
-
-          echo "========================================"
-          echo "          SOURCE VERIFICATION"
-          echo "========================================"
-
-          echo
-          echo "===== KERNEL VERSION ====="
-
-          grep '^VERSION[[:space:]]*=' Makefile
-          grep '^PATCHLEVEL[[:space:]]*=' Makefile
-          grep '^SUBLEVEL[[:space:]]*=' Makefile
-
-          echo
-          echo "===== PHOENIX CONFIG FILE ====="
-
-          test -f \
-            arch/arm64/configs/vendor/phoenix.config
-
-          grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
-            arch/arm64/configs/vendor/phoenix.config
-
-          echo
-          echo "===== ATH9K HTC ====="
-
-          test -f \
-            drivers/net/wireless/ath/ath9k/Kconfig
-
-          grep -n \
-            'config ATH9K_HTC' \
-            drivers/net/wireless/ath/ath9k/Kconfig || true
-
-          echo
-          echo "===== AR9271 ====="
-
-          grep -n \
-            'AR9271' \
-            drivers/net/wireless/ath/ath9k/Kconfig || true
-
-
-      # ============================================================
-      # 6. GENERATE BASE ARM64 CONFIGURATION
-      # ============================================================
-      - name: Generate Phoenix base configuration
-        working-directory: kernel
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "     GENERATING BASE CONFIGURATION"
-          echo "========================================"
 
           rm -rf out
-
           mkdir -p out
 
           make \
@@ -177,67 +50,12 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             vendor/sdmsteppe-perf_defconfig
 
-          echo
-          echo "===== BASE CONFIG CREATED ====="
+          test -f "$PWD/out/.config"
 
-          test -f \
-            "$PWD/out/.config"
-
-          echo
-          echo "===== BASE ARM64 ====="
-
-          grep -n \
-            '^CONFIG_ARM64=' \
-            "$PWD/out/.config" || true
-
-          echo
-          echo "===== BASE PHOENIX ====="
-
-          grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
-            "$PWD/out/.config" || true
-
-
-      # ============================================================
-      # 7. INSPECT PHOENIX FRAGMENT
-      # ============================================================
-      - name: Inspect Phoenix configuration
-        working-directory: kernel
-        run: |
-          set -e
-
-          echo "========================================"
-          echo "       PHOENIX CONFIGURATION"
-          echo "========================================"
-
-          echo
-          echo "===== PHOENIX SOURCE ====="
-
-          grep -n \
-            'CONFIG_MACH_XIAOMI_PHOENIX' \
-            "$PWD/arch/arm64/configs/vendor/phoenix.config"
-
-          echo
-          echo "===== FULL PHOENIX CONFIG ====="
-
-          cat \
-            "$PWD/arch/arm64/configs/vendor/phoenix.config"
-
-
-      # ============================================================
-      # 8. MERGE PHOENIX CONFIGURATION
-      #
-      # IMPORTANT:
-      # ARCH=arm64 is explicitly passed to merge_config.sh.
-      # ============================================================
       - name: Merge Phoenix configuration
         working-directory: kernel
         run: |
           set -o pipefail
-
-          echo "========================================"
-          echo "       MERGING PHOENIX CONFIG"
-          echo "========================================"
 
           ARCH=arm64 \
           CROSS_COMPILE=aarch64-linux-gnu- \
@@ -247,29 +65,40 @@ jobs:
             "$PWD/arch/arm64/configs/vendor/phoenix.config" \
             2>&1 | tee "$PWD/out/phoenix-merge.log"
 
-          echo
-          echo "===== CONFIG AFTER MERGE ====="
-
-          grep -n \
-            '^CONFIG_ARM64=' \
-            "$PWD/out/.config" || true
-
-          grep -n \
-            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
-            "$PWD/out/.config" || true
-
-
-      # ============================================================
-      # 9. FINALIZE ARM64 CONFIGURATION
-      # ============================================================
-      - name: Finalize configuration
+      - name: Enable NetHunter wireless driver
         working-directory: kernel
         run: |
           set -e
 
-          echo "========================================"
-          echo "          FINALIZING CONFIG"
-          echo "========================================"
+          CONFIG="$PWD/out/.config"
+
+          echo "===== BEFORE ATH9K HTC ====="
+          grep -E \
+            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_ATH9K=|CONFIG_ATH9K_HTC=)' \
+            "$CONFIG" || true
+
+          ./scripts/config --file "$CONFIG" \
+            --enable USB \
+            --enable WLAN \
+            --enable CFG80211 \
+            --enable MAC80211 \
+            --enable WLAN_VENDOR_ATH \
+            --enable ATH9K \
+            --enable ATH9K_HW \
+            --enable ATH9K_COMMON \
+            --module ATH9K_HTC
+
+          echo
+          echo "===== AFTER ATH9K HTC ====="
+
+          grep -E \
+            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_WLAN_VENDOR_ATH=|CONFIG_ATH9K=|CONFIG_ATH9K_HW=|CONFIG_ATH9K_COMMON=|CONFIG_ATH9K_HTC=)' \
+            "$CONFIG" || true
+
+      - name: Finalize configuration
+        working-directory: kernel
+        run: |
+          set -e
 
           make \
             O="$PWD/out" \
@@ -277,142 +106,171 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
 
-          echo
-          echo "===== FINAL CONFIG ====="
-
-          echo
-          echo "ARM64:"
-          grep -n \
-            '^CONFIG_ARM64=' \
-            "$PWD/out/.config" || true
-
-          echo
-          echo "PHOENIX:"
-          grep -n \
-            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
-            "$PWD/out/.config" || true
-
-
-      # ============================================================
-      # 10. VERIFY FINAL CONFIGURATION
-      # ============================================================
-      - name: Verify final Phoenix configuration
+      - name: Verify final configuration
         working-directory: kernel
         run: |
           set -e
 
           CONFIG="$PWD/out/.config"
 
-          echo "========================================"
-          echo "       FINAL CONFIG VERIFICATION"
-          echo "========================================"
+          echo "===== FINAL DEVICE ====="
+          grep '^CONFIG_MACH_XIAOMI_PHOENIX=' "$CONFIG"
 
-          echo
-          echo "===== ARM64 ====="
+          echo "===== FINAL ARCH ====="
+          grep '^CONFIG_ARM64=' "$CONFIG"
 
-          grep -n \
-            '^CONFIG_ARM64=' \
+          echo "===== FINAL USB/WIRELESS ====="
+          grep -E \
+            '^(CONFIG_USB=|CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=|CONFIG_WLAN_VENDOR_ATH=)' \
             "$CONFIG"
 
-          if ! grep -q \
-            '^CONFIG_ARM64=y$' \
-            "$CONFIG"; then
-
-            echo
-            echo "ERROR: ARM64 configuration is missing."
-
-            exit 1
-          fi
-
-          echo "CONFIG_ARM64=y OK"
-
-
-          echo
-          echo "===== PHOENIX ====="
-
-          grep -n \
-            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
+          echo "===== FINAL ATH9K ====="
+          grep -E \
+            '^(CONFIG_ATH9K=|CONFIG_ATH9K_HW=|CONFIG_ATH9K_COMMON=|CONFIG_ATH9K_HTC=)' \
             "$CONFIG"
 
-          if ! grep -q \
-            '^CONFIG_MACH_XIAOMI_PHOENIX=y$' \
-            "$CONFIG"; then
+          test "$(grep '^CONFIG_MACH_XIAOMI_PHOENIX=' "$CONFIG")" = "CONFIG_MACH_XIAOMI_PHOENIX=y"
+          test "$(grep '^CONFIG_ARM64=' "$CONFIG")" = "CONFIG_ARM64=y"
+          test "$(grep '^CONFIG_USB=' "$CONFIG")" = "CONFIG_USB=y"
+          test "$(grep '^CONFIG_WLAN=' "$CONFIG")" = "CONFIG_WLAN=y"
+          test "$(grep '^CONFIG_CFG80211=' "$CONFIG")" = "CONFIG_CFG80211=y"
+          test "$(grep '^CONFIG_MAC80211=' "$CONFIG")" = "CONFIG_MAC80211=y"
+          test "$(grep '^CONFIG_ATH9K_HTC=' "$CONFIG")" = "CONFIG_ATH9K_HTC=m"
 
-            echo
-            echo "ERROR: Phoenix configuration is missing."
-
-            echo
-            echo "Relevant Phoenix settings:"
-            grep -i \
-              'PHOENIX' \
-              "$CONFIG" || true
-
-            exit 1
-          fi
-
-          echo "CONFIG_MACH_XIAOMI_PHOENIX=y OK"
-
-
-          echo
-          echo "===== USB ====="
-
-          grep -n \
-            '^CONFIG_USB=' \
-            "$CONFIG" || true
-
-
-          echo
-          echo "===== WLAN ====="
-
-          grep -nE \
-            '^(CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=)' \
-            "$CONFIG" || true
-
-
-          echo
-          echo "===== ATH9K HTC ====="
-
-          grep -n \
-            '^CONFIG_ATH9K_HTC=' \
-            "$CONFIG" || \
-            echo "CONFIG_ATH9K_HTC is not enabled yet"
-
-
-          echo
-          echo "========================================"
-          echo "       PHOENIX CONFIGURATION PASSED"
-          echo "========================================"
-
-
-      # ============================================================
-      # 11. SHOW MERGE WARNINGS
-      # ============================================================
-      - name: Show configuration warnings
-        if: always()
+      - name: Build kernel
         working-directory: kernel
         run: |
-          echo "========================================"
-          echo "       CONFIGURATION MERGE LOG"
-          echo "========================================"
+          set -e
 
-          if [ -f "$PWD/out/phoenix-merge.log" ]; then
-            cat "$PWD/out/phoenix-merge.log"
-          else
-            echo "No merge log found."
+          make \
+            -j"$(nproc)" \
+            O="$PWD/out" \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            Image.gz \
+            modules \
+            dtbs
+
+      - name: Collect kernel outputs
+        working-directory: kernel
+        run: |
+          set -e
+
+          rm -rf "$PWD/package"
+          mkdir -p "$PWD/package/modules"
+
+          test -f "$PWD/out/arch/arm64/boot/Image.gz"
+
+          cp \
+            "$PWD/out/arch/arm64/boot/Image.gz" \
+            "$PWD/package/Image.gz"
+
+          find "$PWD/out" \
+            -type f \
+            -name '*.dtb' \
+            -exec cp {} "$PWD/package/" \;
+
+          find "$PWD/out" \
+            -type f \
+            -name 'ath9k_htc.ko' \
+            -exec cp {} "$PWD/package/modules/" \;
+
+          echo "===== PACKAGE CONTENTS ====="
+          find "$PWD/package" -type f -print
+
+      - name: Prepare AnyKernel3
+        run: |
+          set -e
+
+          git clone \
+            --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git \
+            anykernel3
+
+          rm -rf anykernel3/.git
+
+          rm -rf anykernel3/modules
+          mkdir -p anykernel3/modules
+
+          cp kernel/package/Image.gz anykernel3/
+
+          find kernel/package/modules \
+            -type f \
+            -name '*.ko' \
+            -exec cp {} anykernel3/modules/ \;
+
+          find kernel/package \
+            -maxdepth 1 \
+            -type f \
+            -name '*.dtb' \
+            -exec cp {} anykernel3/ \;
+
+      - name: Configure AnyKernel3
+        run: |
+          set -e
+
+          cat > anykernel3/anykernel.sh <<'EOF'
+          # AnyKernel3 Ramdisk Mod Script
+          # POCO X2 / Phoenix
+          properties() { '
+          kernel.string=POCO X2 NetHunter Kernel
+          do.devicecheck=0
+          do.modules=1
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=phoenix
+          device.name2=phoenixin
+          '; }
+
+          block=boot;
+          is_slot_device=0;
+
+          . tools/ak3-core.sh;
+          dump_boot;
+          split_boot;
+
+          replace_kernel;
+          patch_cmdline;
+
+          if [ -d modules ]; then
+            bind_mount_modules;
+            cp -af modules/* "$ramdisk/lib/modules/" 2>/dev/null || true;
           fi
 
+          flash_boot;
+          ```
 
-      # ============================================================
-      # 12. UPLOAD DIAGNOSTIC ARTIFACT
-      # ============================================================
-      - name: Upload configuration diagnostic
-        if: always()
+      - name: Build flashable kernel ZIP
+        run: |
+          set -e
+
+          cd anykernel3
+
+          zip -r9 \
+            ../POCO-X2-NetHunter-Kernel.zip \
+            . \
+            -x '*.git*' \
+            -x 'README.md'
+
+      - name: Upload flashable kernel ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: phoenix-kernel-config-diagnostic
+          name: POCO-X2-NetHunter-Kernel
+          path: POCO-X2-NetHunter-Kernel.zip
+          if-no-files-found: error
+
+      - name: Upload raw kernel and diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: POCO-X2-NetHunter-Build-Diagnostics
           include-hidden-files: true
           path: |
             kernel/out/.config
             kernel/out/phoenix-merge.log
-            kernel/arch/arm64/configs/vendor/phoenix.config
+            kernel/out/arch/arm64/boot/Image.gz
+            kernel/out/**/*.dtb
+            kernel/out/**/*.ko
+            kernel/package/**
           if-no-files-found: warn
