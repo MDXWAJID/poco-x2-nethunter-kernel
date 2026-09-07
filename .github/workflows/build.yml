@@ -1,16 +1,30 @@
-name: Build Phoenix baseline kernel
+name: POCO X2 NetHunter Kernel
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
+
+      # ============================================================
+      # 1. CHECK OUT THIS GITHUB REPOSITORY
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # 2. INSTALL BUILD DEPENDENCIES
+      # ============================================================
       - name: Install build dependencies
         run: |
+          set -e
+
           sudo apt-get update
+
           sudo apt-get install -y \
             git \
             bc \
@@ -18,6 +32,7 @@ jobs:
             flex \
             build-essential \
             gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             libssl-dev \
             libelf-dev \
             device-tree-compiler \
@@ -27,157 +42,305 @@ jobs:
             zip \
             python3
 
-      - name: Clone crDroid kernel
-        run: |
-          git clone \
-            --depth=1 \
-            --branch 16.0 \
-            https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
-            kernel
 
-      - name: Show source information
+      # ============================================================
+      # 3. SHOW RUNNER INFORMATION
+      # ============================================================
+      - name: Show build environment
+        run: |
+          echo "===== RUNNER ====="
+          uname -a
+
+          echo
+          echo "===== CPU ====="
+          nproc
+
+          echo
+          echo "===== MEMORY ====="
+          free -h
+
+          echo
+          echo "===== DISK ====="
+          df -h
+
+          echo
+          echo "===== CROSS COMPILER ====="
+          aarch64-linux-gnu-gcc --version
+
+
+      # ============================================================
+      # 4. PREPARE KERNEL SOURCE
+      # ============================================================
+      - name: Prepare kernel source
+        run: |
+          set -e
+
+          if [ ! -d "kernel" ]; then
+            echo "kernel directory does not exist."
+            echo "Cloning crDroid SM6150 kernel source..."
+
+            git clone \
+              --depth=1 \
+              --branch 16.0 \
+              https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150.git \
+              kernel
+          else
+            echo "kernel directory already exists."
+          fi
+
+          echo
+          echo "===== KERNEL DIRECTORY ====="
+          ls -la kernel
+
+          echo
+          echo "===== GIT INFORMATION ====="
+          cd kernel
+          git remote -v || true
+          git branch --show-current || true
+          git log -1 --oneline || true
+
+
+      # ============================================================
+      # 5. VERIFY KERNEL SOURCE
+      # ============================================================
+      - name: Verify kernel source
         working-directory: kernel
         run: |
-          echo "===== SOURCE ====="
-          git rev-parse HEAD
-          git log -1 --oneline
+          set -e
+
+          echo "===== KERNEL VERSION FROM MAKEFILE ====="
+
+          grep '^VERSION[[:space:]]*=' Makefile
+          grep '^PATCHLEVEL[[:space:]]*=' Makefile
+          grep '^SUBLEVEL[[:space:]]*=' Makefile
+
           echo
-          echo "===== KERNEL VERSION ====="
-          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile
+          echo "===== EXPECTED PHOENIX CONFIG ====="
 
-      - name: Create output directory
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/kernel/out"
+          test -f arch/arm64/configs/vendor/phoenix.config
 
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            arch/arm64/configs/vendor/phoenix.config || true
+
+          echo
+          echo "===== ATH9K HTC SOURCE ====="
+
+          test -f drivers/net/wireless/ath/ath9k/Kconfig
+
+          grep -n \
+            'config ATH9K_HTC' \
+            drivers/net/wireless/ath/ath9k/Kconfig || true
+
+          echo
+          echo "===== AR9271 REFERENCE ====="
+
+          grep -n \
+            'AR9271' \
+            drivers/net/wireless/ath/ath9k/Kconfig || true
+
+
+      # ============================================================
+      # 6. GENERATE PHOENIX BASE CONFIGURATION
+      # ============================================================
       - name: Generate Phoenix base configuration
         working-directory: kernel
         run: |
+          set -e
+
+          echo "===== GENERATING BASE CONFIGURATION ====="
+
+          rm -rf out
+          mkdir -p out
+
           make \
             O="$PWD/out" \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             vendor/sdmsteppe-perf_defconfig
 
-      - name: Add Phoenix configuration
+          echo
+          echo "===== BASE CONFIG GENERATED ====="
+
+          test -f "$PWD/out/.config"
+
+          echo
+          echo "===== BASE PHOENIX VALUE ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/out/.config" || true
+
+
+      # ============================================================
+      # 7. INSPECT PHOENIX SOURCE CONFIG
+      # ============================================================
+      - name: Inspect Phoenix source configuration
         working-directory: kernel
         run: |
-          ./scripts/kconfig/merge_config.sh \
-            -O "$PWD/out" \
+          set -e
+
+          echo "===== PHOENIX SOURCE CONFIG ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/arch/arm64/configs/vendor/phoenix.config" || true
+
+          echo
+          echo "===== COMPLETE PHOENIX CONFIG ====="
+
+          cat \
             "$PWD/arch/arm64/configs/vendor/phoenix.config"
 
+
+      # ============================================================
+      # 8. MERGE PHOENIX CONFIGURATION
+      # ============================================================
+      - name: Merge Phoenix configuration
+        working-directory: kernel
+        run: |
+          set -o pipefail
+
+          echo "===== MERGING PHOENIX CONFIGURATION ====="
+
+          ./scripts/kconfig/merge_config.sh \
+            -O "$PWD/out" \
+            "$PWD/out/.config" \
+            "$PWD/arch/arm64/configs/vendor/phoenix.config" \
+            2>&1 | tee "$PWD/out/phoenix-merge.log"
+
+          echo
+          echo "===== MERGE COMPLETED ====="
+
+          echo
+          echo "===== CONFIG AFTER MERGE ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/out/.config" || true
+
+
+      # ============================================================
+      # 9. FINALIZE CONFIGURATION
+      # ============================================================
       - name: Finalize configuration
         working-directory: kernel
         run: |
+          set -e
+
+          echo "===== RUNNING OLDDEFCONFIG ====="
+
           make \
             O="$PWD/out" \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             olddefconfig
 
-      - name: Verify Phoenix configuration
+          echo
+          echo "===== CONFIG AFTER OLDDEFCONFIG ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/out/.config" || true
+
+
+      # ============================================================
+      # 10. DIAGNOSE FINAL CONFIGURATION
+      # ============================================================
+      - name: Diagnose final Phoenix configuration
         working-directory: kernel
         run: |
           set -e
 
           CONFIG="$PWD/out/.config"
 
+          echo
+          echo "============================================================"
+          echo "              FINAL CONFIGURATION DIAGNOSTIC"
+          echo "============================================================"
+
+          echo
           echo "===== DEVICE ====="
 
-          grep -q '^CONFIG_MACH_XIAOMI_PHOENIX=y$' "$CONFIG"
-          echo "CONFIG_MACH_XIAOMI_PHOENIX=y OK"
+          grep -n \
+            '^CONFIG_MACH_XIAOMI_PHOENIX=' \
+            "$CONFIG" || true
+
+          echo
+          echo "===== ALL PHOENIX SETTINGS ====="
+
+          grep -in \
+            'PHOENIX' \
+            "$CONFIG" || true
 
           echo
           echo "===== ARCHITECTURE ====="
 
-          grep -q '^CONFIG_ARM64=y$' "$CONFIG"
-          echo "CONFIG_ARM64=y OK"
+          grep -n \
+            '^CONFIG_ARM64=' \
+            "$CONFIG" || true
 
           echo
           echo "===== USB ====="
 
-          grep -q '^CONFIG_USB=y$' "$CONFIG"
-          echo "CONFIG_USB=y OK"
+          grep -n \
+            '^CONFIG_USB=' \
+            "$CONFIG" || true
 
           echo
-          echo "===== WIRELESS CORE ====="
+          echo "===== WIRELESS ====="
 
-          grep -q '^CONFIG_WLAN=y$' "$CONFIG"
-          echo "CONFIG_WLAN=y OK"
-
-          grep -q '^CONFIG_CFG80211=' "$CONFIG"
-          echo "CONFIG_CFG80211 present"
-
-          grep -q '^CONFIG_MAC80211=' "$CONFIG"
-          echo "CONFIG_MAC80211 present"
+          grep -nE \
+            '^(CONFIG_WLAN=|CONFIG_CFG80211=|CONFIG_MAC80211=)' \
+            "$CONFIG" || true
 
           echo
-          echo "===== AR9XXX STATUS ====="
+          echo "===== ATH9K HTC ====="
 
-          if grep -q '^CONFIG_ATH9K_HTC=' "$CONFIG"; then
-            grep '^CONFIG_ATH9K_HTC=' "$CONFIG"
-          else
+          grep -n \
+            '^CONFIG_ATH9K_HTC=' \
+            "$CONFIG" || \
             echo "CONFIG_ATH9K_HTC is not enabled yet"
-            echo "This is EXPECTED for the baseline build."
+
+          echo
+          echo "===== PHOENIX SOURCE VALUE ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/arch/arm64/configs/vendor/phoenix.config" || true
+
+          echo
+          echo "===== BASE CONFIG VALUE ====="
+
+          grep -n \
+            'CONFIG_MACH_XIAOMI_PHOENIX' \
+            "$PWD/out/.config" || true
+
+          echo
+          echo "===== MERGE LOG ====="
+
+          if [ -f "$PWD/out/phoenix-merge.log" ]; then
+            cat "$PWD/out/phoenix-merge.log"
+          else
+            echo "Merge log was not created."
           fi
 
           echo
-          echo "===== CONFIGURATION CHECK PASSED ====="
+          echo "============================================================"
+          echo "          END CONFIGURATION DIAGNOSTIC"
+          echo "============================================================"
 
-      - name: Show important configuration
-        working-directory: kernel
-        run: |
-          echo "===== IMPORTANT CONFIGURATION ====="
 
-          grep -E \
-            '^(CONFIG_MACH_XIAOMI_PHOENIX|CONFIG_ARM64|CONFIG_USB|CONFIG_WLAN|CONFIG_CFG80211|CONFIG_MAC80211|CONFIG_ATH|CONFIG_WLAN_VENDOR_ATH)' \
-            out/.config || true
-
-      - name: Build kernel
-        working-directory: kernel
-        run: |
-          make \
-            -j"$(nproc)" \
-            O="$PWD/out" \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            Image.gz modules
-
-      - name: Show build output
-        working-directory: kernel
-        run: |
-          echo "===== KERNEL OUTPUT ====="
-
-          ls -lh out/arch/arm64/boot/ || true
-
-          echo
-          echo "===== MODULE COUNT ====="
-
-          find out -name '*.ko' -type f | wc -l
-
-      - name: Package baseline artifacts
-        working-directory: kernel
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/artifacts"
-
-          cp out/arch/arm64/boot/Image.gz \
-            "$GITHUB_WORKSPACE/artifacts/Image.gz"
-
-          cp out/.config \
-            "$GITHUB_WORKSPACE/artifacts/kernel.config"
-
-          find out \
-            -name '*.ko' \
-            -type f \
-            -exec cp --parents {} "$GITHUB_WORKSPACE/artifacts/" \;
-
-      - name: Upload baseline kernel
+      # ============================================================
+      # 11. UPLOAD DIAGNOSTIC ARTIFACT
+      # ============================================================
+      - name: Upload configuration diagnostic
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phoenix-baseline-kernel
-          path: artifacts/
-
-      - name: Complete
-        run: |
-          echo "======================================"
-          echo " PHOENIX BASELINE BUILD SUCCESSFUL"
-          echo "======================================"
+          name: phoenix-kernel-config-diagnostic
+          path: |
+            kernel/out/.config
+            kernel/out/phoenix-merge.log
+            kernel/arch/arm64/configs/vendor/phoenix.config
+          if-no-files-found: warn
